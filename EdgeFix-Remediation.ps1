@@ -3,18 +3,14 @@
     Intune Remediations: run with "Run this script using the logged-on credentials" = Yes
 
     1. Closes Microsoft Edge in the logged-on user's session
-    2. Renames %LOCALAPPDATA%\Microsoft\Edge\User Data to "User Data OLD"
-       (an existing "User Data OLD" is kept and renamed with a timestamp)
+    2. Deletes %LOCALAPPDATA%\Microsoft\Edge\User Data, Edge creates a new one on next start
     3. Sets HKCU\Software\ME\EdgeFix = 1 (DWORD)
 
-    The registry value is only written once the folder has been renamed (or does not exist),
-    so a failed rename is retried on the next run.
+    The registry value is only written once the folder is gone, so a failed delete
+    is retried on the next run.
 #>
 
-$EdgePath  = Join-Path $env:LOCALAPPDATA 'Microsoft\Edge'
-$UserData  = Join-Path $EdgePath 'User Data'
-$NewName   = 'User Data OLD'
-$OldPath   = Join-Path $EdgePath $NewName
+$UserData  = Join-Path $env:LOCALAPPDATA 'Microsoft\Edge\User Data'
 $RegPath   = 'HKCU:\Software\ME'
 $ValueName = 'EdgeFix'
 
@@ -40,18 +36,10 @@ try {
     if (Test-Path -LiteralPath $UserData) {
         Stop-Edge
 
-        if (Test-Path -LiteralPath $OldPath) {
-            $backupName = "$NewName $(Get-Date -Format 'yyyyMMdd-HHmmss')"
-            Rename-Item -LiteralPath $OldPath -NewName $backupName -ErrorAction Stop
-            Write-Output "Existing '$NewName' renamed to '$backupName'"
-        }
-
         # Edge can take a moment to release its file handles
-        $renamed = $false
-        for ($attempt = 1; $attempt -le 10 -and -not $renamed; $attempt++) {
+        for ($attempt = 1; $attempt -le 10 -and (Test-Path -LiteralPath $UserData); $attempt++) {
             try {
-                Rename-Item -LiteralPath $UserData -NewName $NewName -ErrorAction Stop
-                $renamed = $true
+                Remove-Item -LiteralPath $UserData -Recurse -Force -ErrorAction Stop
             }
             catch {
                 $lastError = $_.Exception.Message
@@ -60,14 +48,14 @@ try {
             }
         }
 
-        if (-not $renamed) {
-            throw "Could not rename '$UserData': $lastError"
+        if (Test-Path -LiteralPath $UserData) {
+            throw "Could not delete '$UserData': $lastError"
         }
 
-        Write-Output "Renamed '$UserData' to '$NewName'"
+        Write-Output "Deleted '$UserData'"
     }
     else {
-        Write-Output "'$UserData' not found, nothing to rename"
+        Write-Output "'$UserData' not found, nothing to delete"
     }
 
     if (-not (Test-Path -Path $RegPath)) {
